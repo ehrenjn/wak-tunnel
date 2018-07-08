@@ -7,8 +7,10 @@ package main
 	//WHEN IT DOWNLOADS A NEW CONNECTION IT SHOULD START A NEW SOCK GORUTINE WITH A RANDOM PORT
 	//IT THEN USES THAT SOCK TO CONNECT TO $port
 
-//GONNA WANT A tunnel STRUCT TO KEEP TRACK OF to AND id AND MAKE upload AND download INTO METHODS
-//ALSO WANT TO STOP IT FROM CONSTANTLY READING FROM conn, DOES JUST CHECKING IF data IS EMPTY WORK?
+//GONNA NEED TO DO A sock.Close conn.Close AT SOME POINT
+//UH OH HTTP HEADERS OFTEN HAVE A host: FIELD WHICH SAYS WHAT ADDRESS YOU CONNECTED TO
+	//THIS WILL PROBABLY NO FRICK ANYTHING UP TOO BADLY, THE IP WOULD BE FINE BUT THE PORT WILL BE DIFFERENT
+//NOW FIGURING OUT JSON POSTING AND DECODING
 
 import (
 	"fmt"
@@ -17,24 +19,36 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"strconv"
+	"time"
 )
 
 var exit = make(chan int)
 
+type tunnel struct {
+	to string
+	toPort string
+	id string
+}
 
-func client(to string) { //actually a server, but pretends to be a client
+
+func client(to string, toPort string) { //actually a server, but pretends to be a client
 	id := strconv.Itoa(rand.Intn(1000000000)) //unique id
+	t := tunnel{to, toPort, id}
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
-		upload(to, id, []byte{}, "init")
+		t.upload([]byte{}, "init")
 		for { //while connection is alive
-			response := download()
+			response := t.download()
 			conn.Write(response)
-			data, _ := ioutil.ReadAll(conn) //calls conn.Read until it gets all its info
-			upload(data)
-			fmt.Println(string(data))
+			data := []byte{}
+			for len(data) == 0 {
+				time.Sleep(100 * time.Millisecond) //sleep time specified in nanoseconds
+				data, _ = ioutil.ReadAll(conn) //ReadAll does all the buffer stuff for me
+			}
+			t.upload(data, "data")
+			fmt.Println("Data:", string(data))
 		}
 	}
 }
@@ -43,16 +57,19 @@ func testClient(addr string) {
 	net.Dial("tcp", addr)
 }
 
-func server() { //actually a client but pretends to be a server
-	_, _ = net.Dial("tcp", "127.0.0.1:7878")
+func server(id string) { //actually a client but pretends to be a server
+	t = tunnel{id: id}
+	connRequest := t.download()
+	fmt.Println(connRequest)
+	//_, _ = net.Dial("tcp", "127.0.0.1:7878")
 }
 
-func upload(to string, from string, data []byte, msgType string) {
-	fmt.Println(msgType, data)
+func (t tunnel) upload(data []byte, msgType string) {
+	fmt.Println("Uploading:", msgType, data)
 	//post data to waksmemes.x10host.com/mess/?tunneling_tests!post
 }
 
-func download() []byte {
+func (t tunnel) download() []byte {
 	fmt.Println(http.HandleFunc)
 	//check waksmemes for new content intended for this comp
 	//nab content, send it to the intended port
@@ -64,6 +81,6 @@ func download() []byte {
 }
 
 func main() {
-	go client("test")
+	go client("test", "7878")
 	fmt.Println(<-exit)
 }
