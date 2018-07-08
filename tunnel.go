@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"strconv"
 	"time"
+	"encoding/json"
 )
 
 var exit = make(chan int)
@@ -28,6 +29,12 @@ type tunnel struct {
 	to string
 	toPort string
 	id string
+}
+
+type message struct {
+	sender tunnel
+	kind string
+	data []byte
 }
 
 
@@ -58,14 +65,16 @@ func testClient(addr string) {
 }
 
 func server(id string) { //actually a client but pretends to be a server
-	t = tunnel{id: id}
+	t := tunnel{id: id}
 	connRequest := t.download()
 	fmt.Println(connRequest)
 	//_, _ = net.Dial("tcp", "127.0.0.1:7878")
 }
 
 func (t tunnel) upload(data []byte, msgType string) {
-	fmt.Println("Uploading:", msgType, data)
+	msg := message{sender: t, kind: msgType, data: data}
+	encoded, _ := json.Marshal(msg)
+	fmt.Println("Uploading:", string(encoded))
 	//post data to waksmemes.x10host.com/mess/?tunneling_tests!post
 }
 
