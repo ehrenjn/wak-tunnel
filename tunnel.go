@@ -10,7 +10,9 @@ package main
 //GONNA NEED TO DO A sock.Close conn.Close AT SOME POINT
 //UH OH HTTP HEADERS OFTEN HAVE A host: FIELD WHICH SAYS WHAT ADDRESS YOU CONNECTED TO
 	//THIS WILL PROBABLY NO FRICK ANYTHING UP TOO BADLY, THE IP WOULD BE FINE BUT THE PORT WILL BE DIFFERENT
-//NOW FIGURING OUT JSON POSTING AND DECODING
+//MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
+//NOW FIGURING OUT UPLOADING AND DOWNLOADING
+//KIND OF FEEL LIKE MY DATA SPLITTING LOGIC CAN BE IMPROVED BUT IDK
 
 import (
 	"fmt"
@@ -24,7 +26,7 @@ import (
 	"encoding/base64"
 )
 
-var exit = make(chan int)
+var EXIT = make(chan int)
 
 type tunnel struct {
 	ToId string //field starts with a capital letter so that its "exported" (so it can be Marshal'd)
@@ -35,7 +37,9 @@ type tunnel struct {
 type message struct {
 	Sender tunnel
 	Type string
-	Data []byte
+	Data string
+	Part int
+	TotalParts int
 }
 
 
@@ -67,11 +71,30 @@ func server(id string) { //actually a client but pretends to be a server
 	//_, _ = net.Dial("tcp", "127.0.0.1:7878")
 }
 
+var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
+func (t tunnel) createMessages(data []byte, msgType string) []message { //server only accepts <10000 byte messages
+	numMessages := (len(data) / MAX_DATA_PER_MSG) + 1
+	allMessages := make([]message, numMessages)
+	for m := 0; m < numMessages; m++ {
+		min := m * MAX_DATA_PER_MSG
+		max := min + MAX_DATA_PER_MSG
+		if max >= len(data) {
+			max = len(data)
+		}
+		dataSlice := data[min: max]
+		dataB64 := base64.StdEncoding.EncodeToString(dataSlice)
+		allMessages[m] = message{t, msgType, dataB64, m, numMessages}
+	}
+	return allMessages
+}
+
 func (t tunnel) upload(data []byte, msgType string) {
-	msg := message{Sender: t, Type: msgType, Data: data}
-	encoded, _ := json.Marshal(msg)
-	fmt.Println("Uploading:", string(encoded))
-	//post data to waksmemes.x10host.com/mess/?tunneling_tests!post
+	allMsgs := t.createMessages(data, msgType)
+	for _, msg := range allMsgs {
+		encoded, _ := json.Marshal(msg)
+		fmt.Println("Uploading:", string(encoded))
+		//post data to waksmemes.x10host.com/mess/?tunneling_tests!post
+	}
 }
 
 func (t tunnel) download() []byte {
@@ -87,5 +110,5 @@ func (t tunnel) download() []byte {
 
 func main() {
 	go client("test", "7878")
-	fmt.Println(<-exit)
+	fmt.Println(<-EXIT)
 }
