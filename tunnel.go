@@ -8,11 +8,13 @@ package main
 	//IT THEN USES THAT SOCK TO CONNECT TO $port
 
 //GONNA NEED TO DO A sock.Close conn.Close AT SOME POINT
+	//TIMEOUTS????
 //UH OH HTTP HEADERS OFTEN HAVE A host: FIELD WHICH SAYS WHAT ADDRESS YOU CONNECTED TO
 	//THIS WILL PROBABLY NO FRICK ANYTHING UP TOO BADLY, THE IP WOULD BE FINE BUT THE PORT WILL BE DIFFERENT
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
-//NOW FIGURING OUT UPLOADING AND DOWNLOADING
-//KIND OF FEEL LIKE MY DATA SPLITTING LOGIC CAN BE IMPROVED BUT IDK
+//GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF
+
+//HOLY MOLY HOW ARE YOU UnmarshalING THAT id HUH????
 
 import (
 	"fmt"
@@ -28,13 +30,14 @@ import (
 
 var EXIT = make(chan int)
 
-type tunnel struct {
+type tunnel struct { //represents connection to waksmemes.x10host
 	ToId string //field starts with a capital letter so that its "exported" (so it can be Marshal'd)
 	ToPort string
 	Id string
+	lastMsgId int //unexported so it's not Marshal'd
 }
 
-type message struct {
+type message struct { //represents a message to be posted to waksmemes
 	Sender tunnel
 	Type string
 	Data string
@@ -45,12 +48,12 @@ type message struct {
 
 func client(to string, toPort string) { //actually a server, but pretends to be a client
 	id := strconv.Itoa(rand.Intn(1000000000)) //unique id
-	t := tunnel{to, toPort, id}
+	t := tunnel{to, toPort, id, 0}
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
-		t.upload([]byte{}, "init")
+		t.upload([]byte{}, "open")
 		for { //while connection is alive
 			response := t.download()
 			conn.Write(response)
@@ -65,14 +68,27 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 }
 
 func server(id string) { //actually a client but pretends to be a server
-	t := tunnel{Id: id}
+	serverGenerator = tunnel{Id: id}
+	for { //keep checking for connection requests
+		time.sleep(500 * time.Millisecond)
+		newMsgs = serverGenerator.download()
+		for _, msg := range newMsgs {
+			if msg.Type == "open" {
+				go serverConnection(msg) //start new server connection
+			}
+		}
+	}
+}
+
+func serverConnection(serverId, openingMsg message) { //acts as a single open port on the server
+	t := tunnel{Id: serverId, To: openingMsg.id}
 	connRequest := t.download()
 	fmt.Println(connRequest)
 	//_, _ = net.Dial("tcp", "127.0.0.1:7878")
 }
 
 var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
-func (t tunnel) createMessages(data []byte, msgType string) []message { //server only accepts <10000 byte messages
+func (t tunnel) createMessages(data []byte, msgType string) []message { //waksmemes accepts <10000 byte messages
 	numMessages := (len(data) / MAX_DATA_PER_MSG) + 1
 	allMessages := make([]message, numMessages)
 	for m := 0; m < numMessages; m++ {
@@ -88,24 +104,26 @@ func (t tunnel) createMessages(data []byte, msgType string) []message { //server
 	return allMessages
 }
 
+var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests"
 func (t tunnel) upload(data []byte, msgType string) {
 	allMsgs := t.createMessages(data, msgType)
 	for _, msg := range allMsgs {
 		encoded, _ := json.Marshal(msg)
 		fmt.Println("Uploading:", string(encoded))
-		//post data to waksmemes.x10host.com/mess/?tunneling_tests!post
+		//http.Post(UPLOAD_URL + "!post", nil, encoded)
 	}
 }
 
-func (t tunnel) download() []byte {
+func (t tunnel) download() []message { //downloads all new messages intended for t
 	fmt.Println(http.HandleFunc)
-	//check waksmemes for new content intended for this comp
-	//nab content, send it to the intended port
-	//GONNA NEED SOME NOTION OF A SESSION SO I DON'T OPEN A NEW SOCKET EVERY TIME
-	//ALSO GONNA WANT TO HAVE MULTIPLE CONNECTIONS MADE TO ONE SERVER AT ONCE
-		//(SO YOU'LL NEED MULTIPLE SERVERS OPEN AT ONCE, EACH WITH 1 SOCKET)
-	//IF YOU WANT MULTIPLE CLIENTS ON ONE COMP TOO THINGS COULD GET MESSY, THINK ABOUT IT
-	return []byte("XD")
+	filter := `{"id": {"min": ` + t.lastMsgId + `}`
+	allJson := http.Post(UPLOAD_URL + "!get", "", filter)
+	var allMsgs []messages
+	allMsgs := json.Unmarshal(allJson, &allMsgs)
+	for _, msg := range allMsgs { //inefficient, considering I'll have to loop over them agian later. whatever
+		//uhhhhhh
+	}
+	t.lastMsgId = allMsgs[-1]//get the last id somehow
 }
 
 func main() {
