@@ -14,7 +14,7 @@ package main
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
 //GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF
 
-//HOLY MOLY HOW ARE YOU UnmarshalING THAT id HUH????
+//MIGHT WANT TO RETHINK IDS: it doesn't make much sense for every server connection to have the same id does it? MIGHT WANT TO CHANGE THE ID OF THE CONNECTION IN THE RESPONSE, THINK ABOUT IT (would this frick up reusing connections or some other useful stuff??)
 
 import (
 	"fmt"
@@ -74,7 +74,7 @@ func server(id string) { //actually a client but pretends to be a server
 		newMsgs = serverGenerator.download()
 		for _, msg := range newMsgs {
 			if msg.Type == "open" {
-				go serverConnection(msg) //start new server connection
+				go serverConnection(id, msg) //start new server connection
 			}
 		}
 	}
@@ -114,16 +114,22 @@ func (t tunnel) upload(data []byte, msgType string) {
 	}
 }
 
+var ID_REGEX = regexp.MustCompile(`"id": (\d+?)`)
 func (t tunnel) download() []message { //downloads all new messages intended for t
 	fmt.Println(http.HandleFunc)
 	filter := `{"id": {"min": ` + t.lastMsgId + `}`
 	allJson := http.Post(UPLOAD_URL + "!get", "", filter)
 	var allMsgs []messages
 	allMsgs := json.Unmarshal(allJson, &allMsgs)
+	goodMsgs := make([]message, len(allMsgs)
 	for _, msg := range allMsgs { //inefficient, considering I'll have to loop over them agian later. whatever
-		//uhhhhhh
+		if msg.Sender.ToId == t.Id {
+			append(goodMsgs, msg)
+		}
 	}
-	t.lastMsgId = allMsgs[-1]//get the last id somehow
+	lastIdStr = string(ID_REGEX.find(allJson)
+	t.lastMsgId = strconv.Atoi(lastIdStr)
+	return goodMsgs
 }
 
 func main() {
