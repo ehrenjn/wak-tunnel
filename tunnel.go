@@ -14,7 +14,10 @@ package main
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
 //GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF
 
-//MIGHT WANT TO RETHINK IDS: it doesn't make much sense for every server connection to have the same id does it? MIGHT WANT TO CHANGE THE ID OF THE CONNECTION IN THE RESPONSE, THINK ABOUT IT (would this frick up reusing connections or some other useful stuff??)
+//HOW AM I RECOMBINING THE MESSAGES? IT WOULD BE INEFFICIENT TO JUST LOOP OVER ALL THE MESSAGES TO RECOMBINE THEM AND THEN LOOP OVER THEM AGIAN TO SEND TO THE conn, BUT THEN IF I MAKE THIS LOOPING EFFICIENT I MIGHT WANT TO THINK ABOUT MAKING ALL THE OTHER LOOPING EFFICIENT WHICH MIGHT BE ROUGH
+	//NEED TO THINK ABOUT IF THERE SHOULD EVER BE > 1 CONNECTION MADE AT ONCE TO A CLIENT OR A serverConnection
+	//TO FIX INEFFICIENCY IN UPLOADING DON'T RETURN A SLICE OF messageS FROM createMessages, JUST UPLOAD EACH message AS ITS GENERATED 
+//ALSO CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
 
 import (
 	"fmt"
@@ -46,9 +49,21 @@ type message struct { //represents a message to be posted to waksmemes
 }
 
 
+func uniqueId() string {
+	return strconv.Itoa(rand.Intn(1000000000))
+}
+
+func readConn(conn net.TCPConn) []byte {
+	data := []byte{}
+	for len(data) == 0 {
+		time.Sleep(100 * time.Millisecond) //sleep time specified in nanoseconds
+		data, _ = ioutil.ReadAll(conn) //ReadAll does all the buffer stuff for me
+	}
+	return data
+}
+
 func client(to string, toPort string) { //actually a server, but pretends to be a client
-	id := strconv.Itoa(rand.Intn(1000000000)) //unique id
-	t := tunnel{to, toPort, id, 0}
+	t := tunnel{to, toPort, uniqueId(), 0}
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
@@ -57,34 +72,34 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 		for { //while connection is alive
 			response := t.download()
 			conn.Write(response)
-			data := []byte{}
-			for len(data) == 0 {
-				time.Sleep(100 * time.Millisecond) //sleep time specified in nanoseconds
-				data, _ = ioutil.ReadAll(conn) //ReadAll does all the buffer stuff for me
-			}
+			data := readConn(conn)
 			t.upload(data, "data")
 		}
 	}
 }
 
-func server(id string) { //actually a client but pretends to be a server
+func server(id string) { //actually a set of clients but pretends to be a server
 	serverGenerator = tunnel{Id: id}
 	for { //keep checking for connection requests
 		time.sleep(500 * time.Millisecond)
 		newMsgs = serverGenerator.download()
 		for _, msg := range newMsgs {
 			if msg.Type == "open" {
-				go serverConnection(id, msg) //start new server connection
+				go serverConnection(msg) //start new server connection
 			}
 		}
 	}
 }
 
-func serverConnection(serverId, openingMsg message) { //acts as a single open port on the server
-	t := tunnel{Id: serverId, To: openingMsg.id}
-	connRequest := t.download()
-	fmt.Println(connRequest)
-	//_, _ = net.Dial("tcp", "127.0.0.1:7878")
+func serverConnection(openingMsg message) { //acts as a single open port on the server
+	t := tunnel{Id: uniqueId(), To: openingMsg.id}
+	conn, _ = net.Dial("tcp", "127.0.0.1:7878")
+	for { //while conn is alive
+		data := readConn(conn)
+		t.upload(data, "data")
+		response := t.download()
+		conn.write(response)
+	}
 }
 
 var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
@@ -104,13 +119,15 @@ func (t tunnel) createMessages(data []byte, msgType string) []message { //waksme
 	return allMessages
 }
 
+func recombineMessages
+
 var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests"
 func (t tunnel) upload(data []byte, msgType string) {
 	allMsgs := t.createMessages(data, msgType)
 	for _, msg := range allMsgs {
 		encoded, _ := json.Marshal(msg)
 		fmt.Println("Uploading:", string(encoded))
-		//http.Post(UPLOAD_URL + "!post", nil, encoded)
+		http.Post(UPLOAD_URL + "!post", nil, encoded)
 	}
 }
 
