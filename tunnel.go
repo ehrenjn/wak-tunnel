@@ -15,8 +15,7 @@ package main
 //GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF
 
 //HOW AM I RECOMBINING THE MESSAGES? IT WOULD BE INEFFICIENT TO JUST LOOP OVER ALL THE MESSAGES TO RECOMBINE THEM AND THEN LOOP OVER THEM AGIAN TO SEND TO THE conn, BUT THEN IF I MAKE THIS LOOPING EFFICIENT I MIGHT WANT TO THINK ABOUT MAKING ALL THE OTHER LOOPING EFFICIENT WHICH MIGHT BE ROUGH
-	//NEED TO THINK ABOUT IF THERE SHOULD EVER BE > 1 CONNECTION MADE AT ONCE TO A CLIENT OR A serverConnection
-	//TO FIX INEFFICIENCY IN UPLOADING DON'T RETURN A SLICE OF messageS FROM createMessages, JUST UPLOAD EACH message AS ITS GENERATED 
+	//NEED TO THINK ABOUT IF THERE SHOULD EVER BE > 1 CONNECTION MADE AT ONCE TO A CLIENT OR A serverConnection 
 //ALSO CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
 
 import (
@@ -102,34 +101,26 @@ func serverConnection(openingMsg message) { //acts as a single open port on the 
 	}
 }
 
-var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
-func (t tunnel) createMessages(data []byte, msgType string) []message { //waksmemes accepts <10000 byte messages
-	numMessages := (len(data) / MAX_DATA_PER_MSG) + 1
-	allMessages := make([]message, numMessages)
-	for m := 0; m < numMessages; m++ {
-		min := m * MAX_DATA_PER_MSG
-		max := min + MAX_DATA_PER_MSG
-		if max >= len(data) {
-			max = len(data)
-		}
-		dataSlice := data[min: max]
-		dataB64 := base64.StdEncoding.EncodeToString(dataSlice)
-		allMessages[m] = message{t, msgType, dataB64, m, numMessages}
-	}
-	return allMessages
-}
-
-func recombineMessages
-
 var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests"
-func (t tunnel) upload(data []byte, msgType string) {
-	allMsgs := t.createMessages(data, msgType)
-	for _, msg := range allMsgs {
+var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
+func (t tunnel) upload(data []byte, msgType string) { //waksmemes accepts <10000 byte messages
+	dataLen := len(data)
+	numMessages := (dataLen / MAX_DATA_PER_MSG) + 1
+	for start := 0; start < dataLen; start += MAX_DATA_PER_MSG { //break data into chunks, send each chunk
+		end := start + MAX_DATA_PER_MSG
+		if end >= dataLen {
+			end = dataLen
+		}
+		dataSlice := data[start: end]
+		dataB64 := base64.StdEncoding.EncodeToString(dataSlice)
+		msg := message{t, msgType, dataB64, m, numMessages}
 		encoded, _ := json.Marshal(msg)
 		fmt.Println("Uploading:", string(encoded))
 		http.Post(UPLOAD_URL + "!post", nil, encoded)
 	}
 }
+
+func recombineMessages
 
 var ID_REGEX = regexp.MustCompile(`"id": (\d+?)`)
 func (t tunnel) download() []message { //downloads all new messages intended for t
