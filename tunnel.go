@@ -12,11 +12,12 @@ package main
 //UH OH HTTP HEADERS OFTEN HAVE A host: FIELD WHICH SAYS WHAT ADDRESS YOU CONNECTED TO
 	//THIS WILL PROBABLY NO FRICK ANYTHING UP TOO BADLY, THE IP WOULD BE FINE BUT THE PORT WILL BE DIFFERENT
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
-//GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF
+//GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF (NOT using the same tunnel, just same port)
 
-//HOW AM I RECOMBINING THE MESSAGES? IT WOULD BE INEFFICIENT TO JUST LOOP OVER ALL THE MESSAGES TO RECOMBINE THEM AND THEN LOOP OVER THEM AGIAN TO SEND TO THE conn, BUT THEN IF I MAKE THIS LOOPING EFFICIENT I MIGHT WANT TO THINK ABOUT MAKING ALL THE OTHER LOOPING EFFICIENT WHICH MIGHT BE ROUGH
-	//NEED TO THINK ABOUT IF THERE SHOULD EVER BE > 1 CONNECTION MADE AT ONCE TO A CLIENT OR A serverConnection 
-//ALSO CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
+//CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
+//UGH NOW server NEEDS TO DOWNLOAD ALL ITS MESSAGES EVEN THOUGH EVERYTHING ELSE JUST NEEDS ONE MESSAGE, GONNA HAVE TO MAKE A NEW FUNCTION TO DO THAT
+	//REMEMBER THAT THIS NEW FUNCTION IS FOR openERS ONLY SO IT DOESN'T NEED TO CHECK FOR MULTIPART MESSAGES
+	//YOU STILL NEED MESSAGE TYPES THOUGH!!! BECAUSE OF CLOSING MESSAGES THAT YOU HAVEN'T IMPLEMENTED YET
 
 import (
 	"fmt"
@@ -30,7 +31,6 @@ import (
 	"encoding/base64"
 )
 
-var EXIT = make(chan int)
 
 type tunnel struct { //represents connection to waksmemes.x10host
 	ToId string //field starts with a capital letter so that its "exported" (so it can be Marshal'd)
@@ -42,7 +42,7 @@ type tunnel struct { //represents connection to waksmemes.x10host
 type message struct { //represents a message to be posted to waksmemes
 	Sender tunnel
 	Type string
-	Data string
+	Data []byte
 	Part int
 	TotalParts int
 }
@@ -70,7 +70,8 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 		t.upload([]byte{}, "open")
 		for { //while connection is alive
 			response := t.download()
-			conn.Write(response)
+			t.ToId = response.Sender.Id
+			conn.Write(response.Data)
 			data := readConn(conn)
 			t.upload(data, "data")
 		}
@@ -83,7 +84,7 @@ func server(id string) { //actually a set of clients but pretends to be a server
 		time.sleep(500 * time.Millisecond)
 		newMsgs = serverGenerator.download()
 		for _, msg := range newMsgs {
-			if msg.Type == "open" {
+			if msg.Type == "open" && msg.Id == id {
 				go serverConnection(msg) //start new server connection
 			}
 		}
@@ -92,7 +93,7 @@ func server(id string) { //actually a set of clients but pretends to be a server
 
 func serverConnection(openingMsg message) { //acts as a single open port on the server
 	t := tunnel{Id: uniqueId(), To: openingMsg.id}
-	conn, _ = net.Dial("tcp", "127.0.0.1:7878")
+	conn, _ = net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
 	for { //while conn is alive
 		data := readConn(conn)
 		t.upload(data, "data")
@@ -113,33 +114,44 @@ func (t tunnel) upload(data []byte, msgType string) { //waksmemes accepts <10000
 		}
 		dataSlice := data[start: end]
 		dataB64 := base64.StdEncoding.EncodeToString(dataSlice)
-		msg := message{t, msgType, dataB64, m, numMessages}
+		part := (start / MAX_DATA_PER_MSG) + 1
+		msg := message{t, msgType, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg)
 		fmt.Println("Uploading:", string(encoded))
 		http.Post(UPLOAD_URL + "!post", nil, encoded)
 	}
 }
 
-func recombineMessages
-
 var ID_REGEX = regexp.MustCompile(`"id": (\d+?)`)
-func (t tunnel) download() []message { //downloads all new messages intended for t
-	fmt.Println(http.HandleFunc)
-	filter := `{"id": {"min": ` + t.lastMsgId + `}`
-	allJson := http.Post(UPLOAD_URL + "!get", "", filter)
-	var allMsgs []messages
-	allMsgs := json.Unmarshal(allJson, &allMsgs)
-	goodMsgs := make([]message, len(allMsgs)
-	for _, msg := range allMsgs { //inefficient, considering I'll have to loop over them agian later. whatever
-		if msg.Sender.ToId == t.Id {
-			append(goodMsgs, msg)
+func (t tunnel) download() message { //downloads the latest message intended for t
+	var fullData []byte
+	lastMsgChunk := message{Part: -1, TotalParts: 1}
+	for lastMsgChunk.Part < lastMsgChunk.TotalParts { //loop until whole message recieved
+		filter := `{"id": {"min": ` + t.lastMsgId + `}`
+		allJson, _ := http.Post(UPLOAD_URL + "!get", "", filter)
+		if allJson != "[]" { //if we recieved any data
+			var allMsgs []messages
+			allMsgs := json.Unmarshal(allJson, &allMsgs)
+			for _, msg = range allMsgs {
+				if msg.Sender.ToId == t.Id { //get all the data we can
+					fullData = append(fullData, msg.Data...)
+					lastMsgChunk = msg
+				}
+			}
+			lastIdStr = string(ID_REGEX.find(allJson)
+			t.lastMsgId = strconv.Atoi(lastIdStr) //don't want to get the same data twice!
 		}
 	}
-	lastIdStr = string(ID_REGEX.find(allJson)
-	t.lastMsgId = strconv.Atoi(lastIdStr)
-	return goodMsgs
+	lastMsgChunk.Data = fullData //Last part of the message should have all important data except for fullData
+	return lastMsgChunk
 }
 
+func (t tunnel) newMessages() []message {
+	
+}
+
+
+var EXIT = make(chan int)
 func main() {
 	go client("test", "7878")
 	fmt.Println(<-EXIT)
