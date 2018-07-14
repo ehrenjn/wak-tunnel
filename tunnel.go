@@ -15,9 +15,7 @@ package main
 //GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF (NOT using the same tunnel, just same port)
 
 //CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
-//UGH NOW server NEEDS TO DOWNLOAD ALL ITS MESSAGES EVEN THOUGH EVERYTHING ELSE JUST NEEDS ONE MESSAGE, GONNA HAVE TO MAKE A NEW FUNCTION TO DO THAT
-	//REMEMBER THAT THIS NEW FUNCTION IS FOR openERS ONLY SO IT DOESN'T NEED TO CHECK FOR MULTIPART MESSAGES
-	//YOU STILL NEED MESSAGE TYPES THOUGH!!! BECAUSE OF CLOSING MESSAGES THAT YOU HAVEN'T IMPLEMENTED YET
+//STILL NEED TO BASE64 DECODE ALL THE MESSAGES
 
 import (
 	"fmt"
@@ -29,6 +27,8 @@ import (
 	"time"
 	"encoding/json"
 	"encoding/base64"
+	"regexp"
+	"bytes"
 )
 
 
@@ -36,7 +36,7 @@ type tunnel struct { //represents connection to waksmemes.x10host
 	ToId string //field starts with a capital letter so that its "exported" (so it can be Marshal'd)
 	ToPort string
 	Id string
-	lastMsgId int //unexported so it's not Marshal'd
+	lastMsgId string //unexported so it's not Marshal'd
 }
 
 type message struct { //represents a message to be posted to waksmemes
@@ -52,7 +52,7 @@ func uniqueId() string {
 	return strconv.Itoa(rand.Intn(1000000000))
 }
 
-func readConn(conn net.TCPConn) []byte {
+func readConn(conn net.Conn) []byte {
 	data := []byte{}
 	for len(data) == 0 {
 		time.Sleep(100 * time.Millisecond) //sleep time specified in nanoseconds
@@ -61,8 +61,15 @@ func readConn(conn net.TCPConn) []byte {
 	return data
 }
 
+func post(url string, payload []byte) []byte { //does a post request
+	resp, _ := http.Post(url, "", bytes.NewReader(payload)) //.Post takes a Reader for some reason
+	defer resp.Body.Close()
+	respBytes, _ := ioutil.ReadAll(resp.Body)
+	return respBytes
+}
+
 func client(to string, toPort string) { //actually a server, but pretends to be a client
-	t := tunnel{to, toPort, uniqueId(), 0}
+	t := tunnel{to, toPort, uniqueId(), "0"}
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
@@ -79,12 +86,12 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 }
 
 func server(id string) { //actually a set of clients but pretends to be a server
-	serverGenerator = tunnel{Id: id}
+	serverGenerator := tunnel{Id: id}
 	for { //keep checking for connection requests
-		time.sleep(500 * time.Millisecond)
-		newMsgs = serverGenerator.download()
+		time.Sleep(500 * time.Millisecond)
+		newMsgs := serverGenerator.newMessages()
 		for _, msg := range newMsgs {
-			if msg.Type == "open" && msg.Id == id {
+			if msg.Type == "open" && msg.Sender.ToId == id {
 				go serverConnection(msg) //start new server connection
 			}
 		}
@@ -92,13 +99,13 @@ func server(id string) { //actually a set of clients but pretends to be a server
 }
 
 func serverConnection(openingMsg message) { //acts as a single open port on the server
-	t := tunnel{Id: uniqueId(), To: openingMsg.id}
-	conn, _ = net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
+	t := tunnel{Id: uniqueId(), ToId: openingMsg.Sender.Id}
+	conn, _ := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
 	for { //while conn is alive
 		data := readConn(conn)
 		t.upload(data, "data")
 		response := t.download()
-		conn.write(response)
+		conn.Write(response.Data)
 	}
 }
 
@@ -113,41 +120,44 @@ func (t tunnel) upload(data []byte, msgType string) { //waksmemes accepts <10000
 			end = dataLen
 		}
 		dataSlice := data[start: end]
-		dataB64 := base64.StdEncoding.EncodeToString(dataSlice)
+		dataB64 := make([]byte, base64.StdEncoding.EncodedLen(len(dataSlice)))
+		base64.StdEncoding.Encode(dataB64, dataSlice) //no & because slices are mutable!
 		part := (start / MAX_DATA_PER_MSG) + 1
 		msg := message{t, msgType, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg)
 		fmt.Println("Uploading:", string(encoded))
-		http.Post(UPLOAD_URL + "!post", nil, encoded)
+		post(UPLOAD_URL + "!post", encoded)
 	}
 }
 
-var ID_REGEX = regexp.MustCompile(`"id": (\d+?)`)
 func (t tunnel) download() message { //downloads the latest message intended for t
 	var fullData []byte
 	lastMsgChunk := message{Part: -1, TotalParts: 1}
 	for lastMsgChunk.Part < lastMsgChunk.TotalParts { //loop until whole message recieved
-		filter := `{"id": {"min": ` + t.lastMsgId + `}`
-		allJson, _ := http.Post(UPLOAD_URL + "!get", "", filter)
-		if allJson != "[]" { //if we recieved any data
-			var allMsgs []messages
-			allMsgs := json.Unmarshal(allJson, &allMsgs)
-			for _, msg = range allMsgs {
-				if msg.Sender.ToId == t.Id { //get all the data we can
-					fullData = append(fullData, msg.Data...)
-					lastMsgChunk = msg
-				}
+		allMsgs := t.newMessages()
+		for _, msg := range allMsgs {
+			if msg.Sender.ToId == t.Id { //only look at data for this tunnel
+				msgChunkData := make([]byte, base64.StdEncoding.DecodedLen(len(msg.Data)))
+				base64.StdEncoding.Decode(msgChunkData, msg.Data)
+				fullData = append(fullData, msg.Data...)
+				lastMsgChunk = msg
 			}
-			lastIdStr = string(ID_REGEX.find(allJson)
-			t.lastMsgId = strconv.Atoi(lastIdStr) //don't want to get the same data twice!
 		}
 	}
 	lastMsgChunk.Data = fullData //Last part of the message should have all important data except for fullData
 	return lastMsgChunk
 }
 
-func (t tunnel) newMessages() []message {
-	
+var ID_REGEX = regexp.MustCompile(`"id": (\d+?)`)
+func (t tunnel) newMessages() []message { //downloads all the messages this tunnel hasn't encountered yet
+	filter := `{"id": {"min": ` + t.lastMsgId + `}`
+	allJson := post(UPLOAD_URL + "!get", []byte(filter))
+	var allMsgs []message
+	json.Unmarshal(allJson, &allMsgs)
+	if len(allMsgs) > 0 {
+		t.lastMsgId = string(ID_REGEX.Find(allJson)) //don't want to get the same data twice!
+	}
+	return allMsgs
 }
 
 
