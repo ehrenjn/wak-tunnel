@@ -88,7 +88,9 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
 		fmt.Println("Recieved new connection")
-		t.upload([]byte{0}, "open") //just send a single character
+		serverTunnelId := uniqueId() //a unique id for server tunnel to use
+		t.upload([]byte(serverTunnelId), "open")
+		t.ToId = serverTunnelId //all following messages are sent to new server tunnel
 		exit := t.runConn(conn)
 		fmt.Println(<-exit)
 	}
@@ -112,7 +114,7 @@ func server(id string) { //actually a set of clients but pretends to be a server
 
 func serverConnection(openingMsg message) { //acts as a single open port on the server
 	fmt.Println("Opening new tunnel on port", openingMsg.Sender.ToPort)
-	t := &tunnel{Id: uniqueId(), ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
+	t := &tunnel{Id: string(openingMsg.Data), ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
 	conn, _ := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
 	exit := t.runConn(conn)
 	fmt.Println(<-exit)
@@ -128,9 +130,9 @@ func (t *tunnel) runConn(conn net.Conn) chan string {
 		}
 	}()
 	go func() { //keep giving conn info
+		download := t.downloader()
 		for {
-			response := t.download()
-			t.ToId = response.Sender.Id
+			response := <-download
 			conn.Write(response.Data)
 		}
 	}()
@@ -158,25 +160,32 @@ func (t *tunnel) upload(data []byte, msgType string) { //WON'T WORK FOR 0 BYTE M
 	}
 }
 
-func (t *tunnel) download() message { //downloads the latest message intended for t
-	var fullData []byte
-	lastMsgChunk := message{Part: -1, TotalParts: 1}
-	for lastMsgChunk.Part < lastMsgChunk.TotalParts { //loop until whole message recieved
-		allMsgs := t.newMessages()
-		for _, msg := range allMsgs {
-			if msg.Sender.ToId == t.Id { //only look at data for this tunnel
-				fmt.Println("Downloaded msg part", msg.Part, "of", msg.TotalParts)
-				msgChunkData := make([]byte, base64.StdEncoding.DecodedLen(len(msg.Data)))
-				base64.StdEncoding.Decode(msgChunkData, msg.Data)
-				fullData = append(fullData, msg.Data...)
-				lastMsgChunk = msg
+func (t *tunnel) downloader() chan message { //downloads the latest message intended for t, DOESN'T FOLLOW THE SAME PATTERN AS upload BECAUSE IT WOULD BE VERY DIFFICULT TO MAKE ONE CALL TO THIS FUNCTION RETURN ONE message (MAINLY BECAUSE I CAN'T Unmarshal MESSAGE idS)
+	var currentMsg message
+	output := make(chan message)
+	go func() {
+		for { //just keep downloading
+			allMsgs := t.newMessages()
+			for _, msg := range allMsgs {
+				if msg.Sender.ToId == t.Id { //only look at data for this tunnel
+					fmt.Println("Downloaded msg part", msg.Part, "of", msg.TotalParts)
+					if msg.Part == 1 {
+						currentMsg = msg
+						currentMsg.Data = []byte{} //reset Data
+					}
+					msgChunkData := make([]byte, base64.StdEncoding.DecodedLen(len(msg.Data)))
+					base64.StdEncoding.Decode(msgChunkData, msg.Data)
+					currentMsg.Data = append(currentMsg.Data, msg.Data...)
+					if msg.Part == msg.TotalParts {
+						fmt.Println("Downloaded:", currentMsg.Data)
+						output <- currentMsg
+					}
+				}
 			}
+			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
-	fmt.Println("Downloaded:", fullData)
-	lastMsgChunk.Data = fullData //Last part of the message should have all important data except for fullData
-	return lastMsgChunk
+	return output
 }
 
 var ID_REGEX = regexp.MustCompile(`"id":(\d+?),`)
