@@ -9,6 +9,7 @@ package main
 
 //GONNA NEED TO DO A sock.Close conn.Close AT SOME POINT
 	//TIMEOUTS????
+	//TIMEOUT ON THAT conn.Read 
 //UH OH HTTP HEADERS OFTEN HAVE A host: FIELD WHICH SAYS WHAT ADDRESS YOU CONNECTED TO
 	//THIS WILL PROBABLY NO FRICK ANYTHING UP TOO BADLY, THE IP WOULD BE FINE BUT THE PORT WILL BE DIFFERENT
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
@@ -22,6 +23,9 @@ package main
 	//IF IT IS TRUE A BETTER BUT PRETTY ANNOYING SOLUTION WOULD BE SENDING DATA WITH THE open MESSAGE
 	//IF ITS NOT TRUE YOU NEED TO FIGURE OUT A CRAZY MODEL THAT PROBABLY INVOLVES LISTENING FOR MORE DATA AT THE SAME TIME AS SENDING IT
 
+//SHOULD FIGURE OUT HOW LONG TIME.SLEEP ACTUALLY WAITS FOR STUFF
+//SHOULD DO ONE OF THOSE EXPONENTIAL WAIT TIME THINGIES FOR CLIENT (AND MAYBE FOR SERVER BUT DON'T GO AS FAR WITH IT) JUST BECAUSE IT'D BE A BIT OF A MESS TO JUST BE CONSTANTLY DLING WHILE A TUNNEL IS OPEN
+	//OH WAIT THAT DOESN'T MAKE ANY SENSE BECAUSE AN OPEN TUNNEL IS JUST WAITING FOR CONNECTION, ITS NOT CONNECTED TO ANYTHING? HOPEFULLY? WHATEVER, THINK ABOUT IT
 
 import (
 	"fmt"
@@ -59,71 +63,83 @@ func uniqueId() string {
 	return strconv.Itoa(rand.Int())
 }
 
-func readConn(conn net.Conn) []byte { //CAN'T RECIEVE 0 LENGTH MESSAGES, but I don't think I need to?
-	data := []byte{}
-	for len(data) == 0 {
-		time.Sleep(100 * time.Millisecond) //sleep time specified in nanoseconds
-		data, _ = ioutil.ReadAll(conn) //ReadAll does all the buffer stuff for me
-	}
-	return data
-}
-
 func post(url string, payload []byte) []byte { //does a post request
-	fmt.Println("Posting:", string(payload))
 	resp, _ := http.Post(url, "", bytes.NewReader(payload)) //.Post takes a Reader for some reason
 	defer resp.Body.Close()
-	respBytes, _ := ioutil.ReadAll(resp.Body)
+	respBytes, _ := ioutil.ReadAll(resp.Body) //ReadAll does all the buffer stuff for me
 	return respBytes
+}
+
+var CONN_READ_BUFFER_SIZE = 100000 //don't expect any message to ever be bigger than this
+func readConn(conn net.Conn) []byte {
+	data := make([]byte, CONN_READ_BUFFER_SIZE)
+	bytesRead, err := conn.Read(data)
+	if err != nil {
+		fmt.Println("HALTING BECAUSE:", err)
+		<-make(chan int)
+	}
+	return data[:bytesRead]
 }
 
 func client(to string, toPort string) { //actually a server, but pretends to be a client
 	t := &tunnel{to, toPort, uniqueId(), 0}
 	sock, _ := net.Listen("tcp", ":0")
-	fmt.Println("Tunnel to", to, "open on", sock.Addr().String())
+	fmt.Println("Tunnel to", to + ":" + toPort, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
 		fmt.Println("Recieved new connection")
 		t.upload([]byte{0}, "open") //just send a single character
-		for { //while connection is alive
-			response := t.download()
-			t.ToId = response.Sender.Id
-			conn.Write(response.Data)
-			data := readConn(conn)
-			t.upload(data, "data")
-		}
+		exit := t.runConn(conn)
+		fmt.Println(<-exit)
 	}
 }
 
 func server(id string) { //actually a set of clients but pretends to be a server
+	fmt.Println("Starting tunnel server", id, "...")
 	serverGenerator := &tunnel{Id: id, lastMsgId: 0}
 	serverGenerator.newMessages() //call just to update lastMsgId
+	fmt.Println("Tunnel ready, waiting for connections")
 	for { //keep checking for connection requests
 		time.Sleep(500 * time.Millisecond)
 		newMsgs := serverGenerator.newMessages()
 		for _, msg := range newMsgs {
 			if msg.Type == "open" && msg.Sender.ToId == id {
-				go serverConnection(msg, serverGenerator.lastMsgId) //start new server connection
+				go serverConnection(msg) //start new server connection
 			}
 		}
 	}
 }
 
-func serverConnection(openingMsg message, lastMsgId int) { //acts as a single open port on the server
+func serverConnection(openingMsg message) { //acts as a single open port on the server
 	fmt.Println("Opening new tunnel on port", openingMsg.Sender.ToPort)
-	t := &tunnel{Id: uniqueId(), ToId: openingMsg.Sender.Id, lastMsgId: lastMsgId}
+	t := &tunnel{Id: uniqueId(), ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
 	conn, _ := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
-	for { //while conn is alive
-		data := readConn(conn)
-		t.upload(data, "data")
-		response := t.download()
-		conn.Write(response.Data)
-	}
+	exit := t.runConn(conn)
+	fmt.Println(<-exit)
+}
+
+func (t *tunnel) runConn(conn net.Conn) chan string {
+	exit := make(chan string)
+	go func() { //keep uploading info from conn
+		for {
+			data := readConn(conn)
+			fmt.Println("GOT DATA:", data)
+			t.upload(data, "data")
+		}
+	}()
+	go func() { //keep giving conn info
+		for {
+			response := t.download()
+			t.ToId = response.Sender.Id
+			conn.Write(response.Data)
+		}
+	}()
+	return exit
 }
 
 var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests2"
 var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
-//upload WON'T WORK FOR 0 BYTE MESSAGES, but that shoudln't matter because readConn can't recieve them anyway
-func (t *tunnel) upload(data []byte, msgType string) {
+func (t *tunnel) upload(data []byte, msgType string) { //WON'T WORK FOR 0 BYTE MESSAGES
 	dataLen := len(data)
 	numMessages := (dataLen / MAX_DATA_PER_MSG) + 1
 	for start := 0; start < dataLen; start += MAX_DATA_PER_MSG { //break data into chunks, send each chunk
@@ -149,13 +165,16 @@ func (t *tunnel) download() message { //downloads the latest message intended fo
 		allMsgs := t.newMessages()
 		for _, msg := range allMsgs {
 			if msg.Sender.ToId == t.Id { //only look at data for this tunnel
+				fmt.Println("Downloaded msg part", msg.Part, "of", msg.TotalParts)
 				msgChunkData := make([]byte, base64.StdEncoding.DecodedLen(len(msg.Data)))
 				base64.StdEncoding.Decode(msgChunkData, msg.Data)
 				fullData = append(fullData, msg.Data...)
 				lastMsgChunk = msg
 			}
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
+	fmt.Println("Downloaded:", fullData)
 	lastMsgChunk.Data = fullData //Last part of the message should have all important data except for fullData
 	return lastMsgChunk
 }
@@ -177,7 +196,7 @@ func (t *tunnel) newMessages() []message { //downloads all the messages this tun
 func main() {
 	rand.Seed(time.Now().UnixNano()) //have to seed the rng
 	if os.Args[1] == "client" {
-		client("test", "7788")
+		client("test", os.Args[2])
 	} else if os.Args[1] == "server" {
 		server("test")
 	}
