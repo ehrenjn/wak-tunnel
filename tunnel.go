@@ -65,14 +65,17 @@ func post(url string, payload []byte) []byte { //does a post request
 }
 
 var CONN_READ_BUFFER_SIZE = 100000 //don't expect any message to ever be bigger than this
-func readConn(conn net.Conn) []byte {
+func readConn(conn net.Conn) ([]byte, string) { //return data and message type
 	data := make([]byte, CONN_READ_BUFFER_SIZE)
 	bytesRead, err := conn.Read(data)
-	if err != nil {
-		fmt.Println("HALTING BECAUSE:", err)
-		<-make(chan int)
+	if err != nil { //if theres an error it means its time to close the conn
+		data = []byte(err.Error())
+		bytesRead = len(data)
+		conn.Close() //close the connection
+		fmt.Println("Conn err (probably just closing):", err)
+		return data, "close"
 	}
-	return data[:bytesRead]
+	return data[:bytesRead], "data"
 }
 
 func b64encode(data []byte) []byte {
@@ -98,7 +101,7 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 		t.upload([]byte(serverTunnelId), "open")
 		t.ToId = serverTunnelId //all following messages are sent to new server tunnel
 		exit := t.runConn(conn)
-		fmt.Println(<-exit)
+		fmt.Println("Closing conn because", <-exit)
 	}
 }
 
@@ -127,26 +130,36 @@ func serverConnection(openingMsg message) { //acts as a single open port on the 
 		fmt.Println("CONN ERR!!!!!!:", err)
 	}
 	exit := t.runConn(conn)
-	fmt.Println(<-exit)
+	fmt.Println("Closing tunnel because", <-exit)
 }
 
 func (t *tunnel) runConn(conn net.Conn) chan string {
 	exit := make(chan string)
 	go func() { //keep uploading info from conn
 		for {
-			data := readConn(conn)
-			fmt.Println("\nConn Data:\n", string(data))
-			t.upload(data, "data")
+			data, dataType := readConn(conn)
+			fmt.Println("\nRead Conn Data:\n", string(data))
+			t.upload(data, dataType)
+			if dataType == "close" {
+				break
+			}
 		}
+		exit <- "conn had an error or was closed by client"
 	}()
 	go func() { //keep giving conn info
 		download := t.downloader()
 		for {
 			response := <-download
-			fmt.Println("Writing", len(response.Data), "bytes to conn")
-			_, err := conn.Write(response.Data)
-			fmt.Println("POSSIBLE WRITING ERR??:", err)
+			if response.Type == "data" {
+				fmt.Println("Writing", len(response.Data), "bytes to conn")
+				_, err := conn.Write(response.Data)
+				fmt.Println("POSSIBLE WRITING ERR (MAKE PROPER HANDLING LATER)??:", err)
+			} else if response.Type == "close" {
+				conn.Close()
+				break
+			}
 		}
+		exit <- "the other tunnel had an error or their conn was closed"
 	}()
 	return exit
 }
