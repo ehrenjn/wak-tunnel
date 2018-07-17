@@ -91,13 +91,14 @@ func b64decode(dataB64 []byte) []byte {
 }
 
 func client(to string, toPort string) { //actually a server, but pretends to be a client
-	t := &tunnel{to, toPort, uniqueId(), 0}
+	t := &tunnel{ToId: to, ToPort: toPort, lastMsgId: 0}
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to + ":" + toPort, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
 		fmt.Println("Recieved new connection")
-		serverTunnelId := uniqueId() //a unique id for server tunnel to use
+		t.Id = uniqueId() //create id for this client tunnel
+		serverTunnelId := uniqueId() //also make a unique id for server tunnel to use
 		t.upload([]byte(serverTunnelId), "open")
 		t.ToId = serverTunnelId //all following messages are sent to new server tunnel
 		exit := t.runConn(conn)
