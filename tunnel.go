@@ -15,17 +15,11 @@ package main
 //MIGHT WANT TO LOWER THE DELAY TIME IN client WHEN ITS WAITING FOR A READ FROM conn
 //GONNA NEED TO THINK ABOUT MULTIPLE CLIENTS CONNECTING TO ONE SERVER FROM DIFFERENT COMPUTERS TRYING TO USE THE SAME PORT AND STUFF (NOT using the same tunnel, just same port)
 
-//CLIENT AND serverConnection HAVE A LOT OF SIMILARITIES, YOU SHOULD TRY TO COMBINE THE FUNCTIONS A LITTLE BIT
-
-//UGGGH NOW I REALIZE THAT IN HTTP THE CLIENT IS THE ONE THAT SENDS DATA FIRST, THERES A FEW WAYS OF SOLVING THIS ONE
-	//YOU HAVE TO KNOW WHETHER THIS IS TRUE IN ALL TCP BASED PROTOS. IT PROBABLY ISN'T
-	//IF IT IS TRUE YOU COULD JUST HAVE THE SERVER SEND AN ack BACK WHEN A CONNECTION IS MADE
-	//IF IT IS TRUE A BETTER BUT PRETTY ANNOYING SOLUTION WOULD BE SENDING DATA WITH THE open MESSAGE
-	//IF ITS NOT TRUE YOU NEED TO FIGURE OUT A CRAZY MODEL THAT PROBABLY INVOLVES LISTENING FOR MORE DATA AT THE SAME TIME AS SENDING IT
-
 //SHOULD FIGURE OUT HOW LONG TIME.SLEEP ACTUALLY WAITS FOR STUFF
 //SHOULD DO ONE OF THOSE EXPONENTIAL WAIT TIME THINGIES FOR CLIENT (AND MAYBE FOR SERVER BUT DON'T GO AS FAR WITH IT) JUST BECAUSE IT'D BE A BIT OF A MESS TO JUST BE CONSTANTLY DLING WHILE A TUNNEL IS OPEN
 	//OH WAIT THAT DOESN'T MAKE ANY SENSE BECAUSE AN OPEN TUNNEL IS JUST WAITING FOR CONNECTION, ITS NOT CONNECTED TO ANYTHING? HOPEFULLY? WHATEVER, THINK ABOUT IT
+
+//ALRIGHT THE ONLY THING YOU HAVE TO DO NOW IS A PROPER CLOSE BECAUSE THATS THE ONLY REASON IT DOESN'T WORK!!!!!!!!
 
 import (
 	"fmt"
@@ -81,6 +75,18 @@ func readConn(conn net.Conn) []byte {
 	return data[:bytesRead]
 }
 
+func b64encode(data []byte) []byte {
+	dataB64 := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
+	base64.StdEncoding.Encode(dataB64, data) //no & because slices are mutable!
+	return dataB64
+}
+
+func b64decode(dataB64 []byte) []byte {
+	data := make([]byte, base64.StdEncoding.DecodedLen(len(dataB64)))
+	amt, _ := base64.StdEncoding.Decode(data, dataB64)
+	return data[:amt]
+}
+
 func client(to string, toPort string) { //actually a server, but pretends to be a client
 	t := &tunnel{to, toPort, uniqueId(), 0}
 	sock, _ := net.Listen("tcp", ":0")
@@ -113,9 +119,13 @@ func server(id string) { //actually a set of clients but pretends to be a server
 }
 
 func serverConnection(openingMsg message) { //acts as a single open port on the server
-	fmt.Println("Opening new tunnel on port", openingMsg.Sender.ToPort)
-	t := &tunnel{Id: string(openingMsg.Data), ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
-	conn, _ := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
+	tunnelId := string(b64decode(openingMsg.Data))
+	fmt.Println("Opening new tunnel on port", openingMsg.Sender.ToPort, "(id ", b64decode(openingMsg.Data), ")")
+	t := &tunnel{Id: tunnelId, ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
+	conn, err := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
+	if err != nil {
+		fmt.Println("CONN ERR!!!!!!:", err)
+	}
 	exit := t.runConn(conn)
 	fmt.Println(<-exit)
 }
@@ -125,7 +135,7 @@ func (t *tunnel) runConn(conn net.Conn) chan string {
 	go func() { //keep uploading info from conn
 		for {
 			data := readConn(conn)
-			fmt.Println("GOT DATA:", data)
+			fmt.Println("\nConn Data:\n", string(data))
 			t.upload(data, "data")
 		}
 	}()
@@ -133,7 +143,9 @@ func (t *tunnel) runConn(conn net.Conn) chan string {
 		download := t.downloader()
 		for {
 			response := <-download
-			conn.Write(response.Data)
+			fmt.Println("Writing", len(response.Data), "bytes to conn")
+			_, err := conn.Write(response.Data)
+			fmt.Println("POSSIBLE WRITING ERR??:", err)
 		}
 	}()
 	return exit
@@ -150,12 +162,11 @@ func (t *tunnel) upload(data []byte, msgType string) { //WON'T WORK FOR 0 BYTE M
 			end = dataLen
 		}
 		dataSlice := data[start: end]
-		dataB64 := make([]byte, base64.StdEncoding.EncodedLen(len(dataSlice)))
-		base64.StdEncoding.Encode(dataB64, dataSlice) //no & because slices are mutable!
+		dataB64 := b64encode(dataSlice)
 		part := (start / MAX_DATA_PER_MSG) + 1
 		msg := message{t, msgType, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
-		fmt.Println("Uploading:", string(encoded))
+		fmt.Println("Uploading", len(encoded), "bytes")
 		post(UPLOAD_URL + "!post", encoded)
 	}
 }
@@ -173,18 +184,17 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 						currentMsg = msg
 						currentMsg.Data = []byte{} //reset Data
 					}
-					msgChunkData := make([]byte, base64.StdEncoding.DecodedLen(len(msg.Data)))
-					base64.StdEncoding.Decode(msgChunkData, msg.Data)
+					msg.Data = b64decode(msg.Data)
 					currentMsg.Data = append(currentMsg.Data, msg.Data...)
 					if msg.Part == msg.TotalParts {
-						fmt.Println("Downloaded:", currentMsg.Data)
+						fmt.Println("\nDownloaded:\n", string(currentMsg.Data))
 						output <- currentMsg
 					}
 				}
 			}
 			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
-	}
+	}()
 	return output
 }
 
