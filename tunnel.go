@@ -244,6 +244,11 @@ func (t *tunnel) newMessages() []message { //downloads all the messages this tun
 
 func main() {
 	rand.Seed(time.Now().UnixNano()) //have to seed the rng
+	cmds := map [int]string {
+		"": []string{"client", "server"},
+		"client": []string{"-p", "\d"},
+		"-p" //STILL WON'T WORK BECAUSE THERES NO WAY TO TELL ONE PORT \d FROM THE OTHER
+	}
 	if os.Args[1] == "client" {
 		client("test", os.Args[2])
 	} else if os.Args[1] == "server" {
