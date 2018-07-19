@@ -27,7 +27,7 @@ package main
 			//THEN conn WILL ALREADY BE CLOSED NO MATTER WHAT ONCE BOTH GORUTINES HAVE STOPPED SO DONT BOTHER CLOSING IT LATER
 		//SO RIGHT NOW I THINK IT ACTUALLY WORKS FINE, HAVE A GOOD THINK ABOUT ALL THE 2 (4?) SCENARIOS
 //SOMETIMES wget HAS TO TRY TWICE OR SOMETHING? IDK
-
+//CHANGE 100K LIMIT, ALSO SET MAX_MSGS = 1000 ON THE DOWNLOAD
 
 import (
 	"fmt"
@@ -97,21 +97,22 @@ func b64decode(dataB64 []byte) []byte {
 	return data[:amt]
 }
 
-func client(to string, toPort string) { //actually a server, but pretends to be a client
-	t := &tunnel{ToPort: toPort, lastMsgId: 0}
+func client(to string, toPort string) { //actually a server, but pretends to be a client	
 	sock, _ := net.Listen("tcp", ":0")
 	fmt.Println("Tunnel to", to + ":" + toPort, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
-		conn, _ := sock.Accept()
+		conn, _ := sock.Accept() //you can have > 1 conn per port?? how did I just find out about this?
 		fmt.Println("Recieved new connection")
-		t.ToId = to //reset ToId every loop because it gets changed later in this loop
-		t.Id = uniqueId() //create id for this client tunnel
-		serverTunnelId := uniqueId() //also make a unique id for server tunnel to use
-		t.upload([]byte(serverTunnelId), "open")
-		t.ToId = serverTunnelId //all following messages are sent to new server tunnel
-		t.runConn(conn)
-		fmt.Println("NO NEW CONNECTIONS ALLOWED DELPLS LATER", <-make(chan int))
+		t := &tunnel{to, toPort, uniqueId(), 0}
+		go clientConnection(conn, t)
 	}
+}
+
+func clientConnection(conn net.Conn, t *tunnel) {
+	serverTunnelId := uniqueId() //also make a unique id for server tunnel to use
+	t.upload([]byte(serverTunnelId), "open") //connect the tunnel
+	t.ToId = serverTunnelId //all following messages are sent to new server tunnel
+	t.runConn(conn) //then keep running untill the connection is closed
 }
 
 func server(id string) { //actually a set of clients but pretends to be a server
@@ -245,8 +246,8 @@ func (t *tunnel) newMessages() []message { //downloads all the messages this tun
 func main() {
 	rand.Seed(time.Now().UnixNano()) //have to seed the rng
 	if os.Args[1] == "client" {
-		client("test", os.Args[2])
+		client(os.Args[2], os.Args[3])
 	} else if os.Args[1] == "server" {
-		server("test")
+		server(os.Args[2])
 	}
 }
