@@ -63,17 +63,28 @@ func post(url string, payload []byte) []byte { //does a post request
 	return respBytes
 }
 
-var CONN_READ_BUFFER_SIZE = 100000 //don't expect any message to ever be bigger than this
-func readConn(conn net.Conn) ([]byte, string) { //return data and message type
-	data := make([]byte, CONN_READ_BUFFER_SIZE)
-	bytesRead, err := conn.Read(data)
-	if err != nil { //if theres an error it means its time to close the conn
+func connReader(conn net.Conn) chan message {
+	output := make(chan message)
+	go func() {
+		err := nil
+		for err == TIMEOUT_ERR || err == nil {//WHILE ITS THE TIMEOUT ERROR or nil
+			err = nil
+			data := //GOTTA FIGURE OUT MY ALLOCATING, THEN THIS FUNC'S DONE
+			for err == nil { //keep reading data until we timeout
+				conn.SetReadDeadline(time.Now() + time.Millisecond) //if we timeout it means theres nothing left to read
+				bytesRead, err = conn.Read(data)
+
+			}
+			if err == TIMEOUT_ERR { //if we read properly, output the data
+				output <- message{Data: data, Type: "data"}
+			}
+		}
 		data = []byte(err.Error())
 		bytesRead = len(data)
 		fmt.Println("Conn err (probably just closing):", err)
-		return data, "close"
-	}
-	return data[:bytesRead], "data"
+		output <- message{Data: data, Type: "close"}
+	}()
+	return output
 }
 
 func b64encode(data []byte) []byte {
