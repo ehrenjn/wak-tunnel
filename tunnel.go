@@ -97,9 +97,9 @@ func b64decode(dataB64 []byte) []byte {
 	return data[:amt]
 }
 
-func client(to string, toPort string) { //actually a server, but pretends to be a client
+func client(to string, toPort string, fromPort string) { //actually a server, but pretends to be a client
 	t := &tunnel{ToPort: toPort, lastMsgId: 0}
-	sock, _ := net.Listen("tcp", ":0")
+	sock, _ := net.Listen("tcp", ":" + fromPort)
 	fmt.Println("Tunnel to", to + ":" + toPort, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept()
@@ -252,10 +252,12 @@ func main() {
 				client(os.Args[2], os.Args[3], "0")
 			case 6:
 				if (os.Args[2] == "-p") {
-					client(os.Args[4], os.Args[3])
+					client(os.Args[4], os.Args[5], os.Args[3])
 				}
+				fallthrough
 			default:
 				fmt.Println("Incorrect syntax, should be: tunnel client [-p portNum] serverName serverPort")
+			}
 		case "server":
 			server(os.Args[2])
 		default:
