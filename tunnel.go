@@ -182,9 +182,13 @@ func (t *tunnel) runConn(conn net.Conn) {
 
 var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests2"
 var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
-func (t *tunnel) upload(data []byte, msgType string) { //WON'T WORK FOR 0 BYTE MESSAGES
+func (t *tunnel) upload(data []byte, msgType string) {
 	dataLen := len(data)
-	numMessages := (dataLen / MAX_DATA_PER_MSG) + 1
+	offset := 1
+	if dataLen % MAX_DATA_PER_MSG == 0 { //only offset by 1 if datalen is not a multiple of MAX_DATA_PER_MSG
+		offset = 0
+	}
+	numMessages := (dataLen / MAX_DATA_PER_MSG) + offset //offset is kinda gross but its all I could think of
 	for start := 0; start < dataLen; start += MAX_DATA_PER_MSG { //break data into chunks, send each chunk
 		end := start + MAX_DATA_PER_MSG
 		if end >= dataLen {
@@ -233,7 +237,7 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 
 var ID_REGEX = regexp.MustCompile(`"id":(\d+?),`)
 func (t *tunnel) newMessages() []message { //downloads all the messages this tunnel hasn't encountered yet
-	filter := fmt.Sprintf(`{"id": {"min": %d}}`, t.lastMsgId + 1)
+	filter := fmt.Sprintf(`{"id": {"min": %d}, "MAX_MSGS": 1000}`, t.lastMsgId + 1)
 	allJson := post(UPLOAD_URL + "!get", []byte(filter))
 	var allMsgs []message
 	json.Unmarshal(allJson, &allMsgs)
