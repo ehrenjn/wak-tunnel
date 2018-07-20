@@ -244,14 +244,24 @@ func (t *tunnel) newMessages() []message { //downloads all the messages this tun
 
 func main() {
 	rand.Seed(time.Now().UnixNano()) //have to seed the rng
-	cmds := map [int]string {
-		"": []string{"client", "server"},
-		"client": []string{"-p", "\d"},
-		"-p" //STILL WON'T WORK BECAUSE THERES NO WAY TO TELL ONE PORT \d FROM THE OTHER
-	}
-	if os.Args[1] == "client" {
-		client("test", os.Args[2])
-	} else if os.Args[1] == "server" {
-		server("test")
+	if len(os.Args) >= 3 {
+		switch os.Args[1] {
+		case "client":
+			switch len(os.Args) {
+			case 4:
+				client(os.Args[2], os.Args[3], "0")
+			case 6:
+				if (os.Args[2] == "-p") {
+					client(os.Args[4], os.Args[3])
+				}
+			default:
+				fmt.Println("Incorrect syntax, should be: tunnel client [-p portNum] serverName serverPort")
+		case "server":
+			server(os.Args[2])
+		default:
+			fmt.Println("First argument must be either server or client")
+		}
+	} else {
+		fmt.Println("At least 2 arguments are needed to run")
 	}
 }
