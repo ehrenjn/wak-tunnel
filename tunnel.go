@@ -20,6 +20,9 @@ package main
 	//OKAY WHAT IF TUNNELS HAVE conns AND MAYBE THE GORUTINES IN runConn DON'T HAVE GO RUTINES THAT CALL GORUTINES BUT ALSO upload IS A FUNCTION SO COMBINING UPLOAD AND WRITE BUT NOT DOWNLOAD AND READING WOULD BE WEIRD AND UGH I DONT KNOW
 	//OKAY LOOK, THAT THING ABOVE MAKES ALMOST NO SENSE BUT!: YOU SHOULD ACTUALLY USE THOSE TWO exit CHANNELS BY GIVING THEM TO THE TWO GORUTINES AND THEY CAN CHECK IF THE CHANNELS ARE CLOSED TO KNOW HOW THE OTHER ONE IS DOING!!!!
 
+//post break stuff:
+	//GET RID OF exitS ONCE YOU'RE SURE EVERYTHING WORKS, THEY'RE GOOD FOR DEBUG FOR NOW
+
 import (
 	"fmt"
 	"net"
@@ -41,6 +44,8 @@ type tunnel struct { //represents connection to waksmemes.x10host
 	ToPort string
 	Id string
 	lastMsgId int //unexported so it's not Marshal'd
+	conn net.Conn
+	open bool
 }
 
 type message struct { //represents a message to be posted to waksmemes
@@ -63,26 +68,35 @@ func post(url string, payload []byte) []byte { //does a post request
 	return respBytes
 }
 
-func connReader(conn net.Conn) chan message {
+func (* tunnel) connReader() chan message {
 	output := make(chan message)
 	go func() {
 		err := nil
-		for err == TIMEOUT_ERR || err == nil {//WHILE ITS THE TIMEOUT ERROR or nil
+		for t.open { //while the tunnel's open
 			err = nil
-			data := //GOTTA FIGURE OUT MY ALLOCATING, THEN THIS FUNC'S DONE
+			data := []byte{}
+			readAmt := 1000
+			totalBytesRead := 0
 			for err == nil { //keep reading data until we timeout
-				conn.SetReadDeadline(time.Now() + time.Millisecond) //if we timeout it means theres nothing left to read
-				bytesRead, err = conn.Read(data)
-
+				newData := make([]byte, readAmt)
+				t.conn.SetReadDeadline(time.Now() + time.Millisecond) //if we timeout it means theres nothing left to read
+				bytesRead, err = t.conn.Read(newData)
+				totalBytesRead += bytesRead
+				data.append(newData)
+				readAmt *= 2 //double readAmt every round
 			}
-			if err == TIMEOUT_ERR { //if we read properly, output the data
-				output <- message{Data: data, Type: "data"}
+			if err.Timeout() { //if we read properly, output the data
+				output <- message{Data: data[:totalBytesRead], Type: "data"}
+			} else {
+				t.Conn.Close()
+				data = []byte(err.Error())
+				bytesRead = len(data)
+				fmt.Println("Conn err (probably just closing):", err)
+				output <- message{Data: data, Type: "close"}
+				return //halt now that the conn is closed
 			}
 		}
-		data = []byte(err.Error())
-		bytesRead = len(data)
-		fmt.Println("Conn err (probably just closing):", err)
-		output <- message{Data: data, Type: "close"}
+		fmt.Println("readConn closing because tunnel was closed by download")
 	}()
 	return output
 }
@@ -105,16 +119,16 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 	for { //keep reusing same socket for every connection
 		conn, _ := sock.Accept() //you can have > 1 conn per port?? how did I just find out about this?
 		fmt.Println("Recieved new connection")
-		t := &tunnel{to, toPort, uniqueId(), 0}
-		go clientConnection(conn, t)
+		t := &tunnel{to, toPort, uniqueId(), 0, conn, true}
+		go clientConnection(t)
 	}
 }
 
-func clientConnection(conn net.Conn, t *tunnel) {
+func clientConnection(t *tunnel) {
 	serverTunnelId := uniqueId() //also make a unique id for server tunnel to use
 	t.upload([]byte(serverTunnelId), "open") //connect the tunnel
 	t.ToId = serverTunnelId //all following messages are sent to new server tunnel
-	t.runConn(conn) //then keep running untill the connection is closed
+	t.runConn() //then keep running untill the connection is closed
 }
 
 func server(id string) { //actually a set of clients but pretends to be a server
@@ -136,41 +150,38 @@ func server(id string) { //actually a set of clients but pretends to be a server
 func serverConnection(openingMsg message) { //acts as a single open port on the server
 	tunnelId := string(b64decode(openingMsg.Data))
 	fmt.Println("Opening new tunnel on port", openingMsg.Sender.ToPort, "(id ", b64decode(openingMsg.Data), ")")
-	t := &tunnel{Id: tunnelId, ToId: openingMsg.Sender.Id} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
 	conn, err := net.Dial("tcp", "localhost:" + openingMsg.Sender.ToPort)
 	if err != nil {
 		fmt.Println("CONN ERR!!!!!!:", err)
 	}
-	t.runConn(conn)
+	t := &tunnel{Id: tunnelId, ToId: openingMsg.Sender.Id, conn, true} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
+	t.runConn()
 }
 
-func (t *tunnel) runConn(conn net.Conn) {
+func (t *tunnel) runConn() {
 	exit := make(chan string)
-	open := true
 	go func() { //keep uploading info from conn
-		for open {
-			data, dataType := readConn(conn)
-			fmt.Println("\nRead Conn Data:\n", string(data))
-			t.upload(data, dataType)
-			if dataType == "close" {
-				open = false //set a flag instead of just breaking so that the download gorutine exits too
-				break
+		readConn = connReader()
+		for t.open {
+			msg := <-readConn
+			fmt.Println("\nRead Conn Data:\n", string(msg.Data))
+			t.upload(msg)
+			if msg.Type == "close" {
+				t.open = false //set a flag instead of just breaking so that the download gorutine exits too
 			}
 		}
 		exit <- "conn had an error or was closed by client"
 	}()
 	go func() { //keep giving conn info
 		download := t.downloader()
-		for open {
+		for t.open {
 			response := <-download
 			if response.Type == "data" {
 				fmt.Println("Writing", len(response.Data), "bytes to conn")
-				_, err := conn.Write(response.Data)
+				_, err := t.conn.Write(response.Data)
 				fmt.Println("POSSIBLE WRITING ERR (MAKE PROPER HANDLING LATER)??:", err)
 			} else if response.Type == "close" {
-				conn.Close() //the conn we're pretending to be has closed so lets close the actual conn
-				open = false
-				break
+				t.open = false
 			}
 		}
 		exit <- "the other tunnel had an error or their conn was closed"
@@ -182,8 +193,8 @@ func (t *tunnel) runConn(conn net.Conn) {
 
 var UPLOAD_URL = "http://waksmemes.x10host.com/mess/?tunneling_tests2"
 var MAX_DATA_PER_MSG = 5000 //playing it safe because b64 encoding and other parts of message make it longer
-func (t *tunnel) upload(data []byte, msgType string) {
-	dataLen := len(data)
+func (t *tunnel) upload(fullMsg message) {
+	dataLen := len(fullMsg.Data)
 	offset := 1
 	if dataLen % MAX_DATA_PER_MSG == 0 { //only offset by 1 if datalen is not a multiple of MAX_DATA_PER_MSG
 		offset = 0
@@ -194,10 +205,10 @@ func (t *tunnel) upload(data []byte, msgType string) {
 		if end >= dataLen {
 			end = dataLen
 		}
-		dataSlice := data[start: end]
+		dataSlice := fullMsg.Data[start: end]
 		dataB64 := b64encode(dataSlice)
 		part := (start / MAX_DATA_PER_MSG) + 1
-		msg := message{t, msgType, dataB64, part, numMessages}
+		msg := message{t, fullMsg.Type, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
 		fmt.Println("Uploading", len(encoded), "bytes")
 		post(UPLOAD_URL + "!post", encoded)
@@ -208,7 +219,7 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 	var currentMsg message
 	output := make(chan message)
 	go func() {
-		for { //just keep downloading
+		for t.open { //just keep downloading until the tunnel closes down
 			allMsgs := t.newMessages()
 			for m := len(allMsgs) - 1; m >= 0; m-- { //LOOPING BACKWARDS BECAUSE NEED OLDEST FIRST
 				msg := allMsgs[m]
@@ -224,6 +235,7 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 						fmt.Println("\nDownloaded:\n", string(currentMsg.Data))
 						output <- currentMsg
 						if currentMsg.Type == "close" { //only way out of downloading
+							fmt.Println("download closing because it's recieved a close message")
 							return
 						}
 					}
@@ -231,6 +243,7 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 			}
 			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
+		fmt.Println("downloader closing because readConn closed the tunnel's conn")
 	}()
 	return output
 }
