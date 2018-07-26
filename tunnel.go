@@ -22,6 +22,11 @@ package main
 
 //post break stuff:
 	//GET RID OF exitS ONCE YOU'RE SURE EVERYTHING WORKS, THEY'RE GOOD FOR DEBUG FOR NOW
+	//OH DAMN THE LOOPBACK NETWORK THINGS SEEMS LIKE IT WOULD ACTUALLY WORK: EVERY SERVER YOU CONNECT TO GETS ASSIGNED A LOOPBACK IP WITH A NAME ON YOUR ROUTING TABLE SO YOU CAN JUST DO STUFF LIKE tunnel client crypto 22; ssh crypto@crypto
+		//UHHHHHH THIS COULD FRICK WITH SOME STUFF BECAUSE REMEMBER THE host: FIELD PROBLEM?? THIS WOULD BE MORE LIKELY TO BE A PROBLEM WITH IPS THAN PORTS
+		//TO FIX THE ISSUE YOU'D HAVE TO MAKE THE SERVER CONNECT TO THE SAME LOOPBACK ADDRESS WHICH WOULD BE KIND OF ANNOYING
+	
+//CURRENT ISSUE: CONN'S GETTING AN EOF ERROR WHENEVER IT TIMES OUT INSTEAD OF A TIMEOUT ERROR?
 
 import (
 	"fmt"
@@ -86,6 +91,7 @@ func (t *tunnel) connReader() chan message {
 			}
 			netErr, ok := err.(net.Error) //have to cast to use .Timeout()
 			if ok && netErr.Timeout() { //if we read properly, output the data
+				fmt.Println("conn timed out")
 				if totalBytesRead > 0 { //only output if we actually read data
 					output <- message{Data: data[:totalBytesRead], Type: "data"}
 				}
