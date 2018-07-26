@@ -68,33 +68,35 @@ func post(url string, payload []byte) []byte { //does a post request
 	return respBytes
 }
 
-func (* tunnel) connReader() chan message {
+func (t *tunnel) connReader() chan message {
 	output := make(chan message)
 	go func() {
-		err := nil
 		for t.open { //while the tunnel's open
-			err = nil
+			var err error
 			data := []byte{}
 			readAmt := 1000
-			totalBytesRead := 0
+			var totalBytesRead, bytesRead int
 			for err == nil { //keep reading data until we timeout
 				newData := make([]byte, readAmt)
-				t.conn.SetReadDeadline(time.Now() + time.Millisecond) //if we timeout it means theres nothing left to read
+				t.conn.SetReadDeadline(time.Now().Add(time.Millisecond)) //if we timeout it means theres nothing left to read
 				bytesRead, err = t.conn.Read(newData)
 				totalBytesRead += bytesRead
-				data.append(newData)
+				data = append(data, newData...)
 				readAmt *= 2 //double readAmt every round
 			}
-			if err.Timeout() { //if we read properly, output the data
-				output <- message{Data: data[:totalBytesRead], Type: "data"}
-			} else {
-				t.Conn.Close()
+			netErr, ok := err.(net.Error) //have to cast to use .Timeout()
+			if ok && netErr.Timeout() { //if we read properly, output the data
+				if totalBytesRead > 0 { //only output if we actually read data
+					output <- message{Data: data[:totalBytesRead], Type: "data"}
+				}
+			} else { //close the conn if we got a real error
 				data = []byte(err.Error())
 				bytesRead = len(data)
 				fmt.Println("Conn err (probably just closing):", err)
 				output <- message{Data: data, Type: "close"}
 				return //halt now that the conn is closed
 			}
+			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
 		fmt.Println("readConn closing because tunnel was closed by download")
 	}()
@@ -126,7 +128,7 @@ func client(to string, toPort string) { //actually a server, but pretends to be 
 
 func clientConnection(t *tunnel) {
 	serverTunnelId := uniqueId() //also make a unique id for server tunnel to use
-	t.upload([]byte(serverTunnelId), "open") //connect the tunnel
+	t.upload(message{Data: []byte(serverTunnelId), Type: "open"}) //connect the tunnel
 	t.ToId = serverTunnelId //all following messages are sent to new server tunnel
 	t.runConn() //then keep running untill the connection is closed
 }
@@ -154,14 +156,14 @@ func serverConnection(openingMsg message) { //acts as a single open port on the 
 	if err != nil {
 		fmt.Println("CONN ERR!!!!!!:", err)
 	}
-	t := &tunnel{Id: tunnelId, ToId: openingMsg.Sender.Id, conn, true} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
+	t := &tunnel{Id: tunnelId, ToId: openingMsg.Sender.Id, conn: conn, open: true} //no lastMsgId 'cause geting time of open is hard. I don't need a lastMsgId because this tunnel has a unique id so I don't have any chance of picking up old messages by accident but it is kina gross that I'm looping through a hundred messages when I don't have to. Only alternative is to somehow unmarshal an id though and that is VERY hard
 	t.runConn()
 }
 
 func (t *tunnel) runConn() {
 	exit := make(chan string)
 	go func() { //keep uploading info from conn
-		readConn = connReader()
+		readConn := t.connReader()
 		for t.open {
 			msg := <-readConn
 			fmt.Println("\nRead Conn Data:\n", string(msg.Data))
@@ -170,6 +172,7 @@ func (t *tunnel) runConn() {
 				t.open = false //set a flag instead of just breaking so that the download gorutine exits too
 			}
 		}
+		t.conn.Close() //doesn't mirror the download func but it's the most convenient spot to .Close
 		exit <- "conn had an error or was closed by client"
 	}()
 	go func() { //keep giving conn info
