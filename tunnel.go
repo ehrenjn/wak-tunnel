@@ -220,6 +220,7 @@ func (t *tunnel) upload(fullMsg message) {
 		msg := message{t, fullMsg.Type, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
 		fmt.Println("Uploading", len(encoded), "bytes")
+		fmt.Println("UPLOADING THESE BYTES:", encoded)
 		post(UPLOAD_URL + "!post", encoded)
 	}
 }
