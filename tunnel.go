@@ -15,18 +15,10 @@ package main
 //DO ARG PARSING
 //NEED TO KEEP TRACK OF ALL GORUTINES AND FIGURE OUT HOW TO CLOSE HANGING GORUTUNES
 	//MAYBE JUST TIMEOUTS? 30 MINS WITH NO DOWNLOAD?
-//THE open FLAG IN runConn IS PRETTY MUCH POINTLESS, SHOULD THINK ABOUT GETTING RID OF IT
-	//IF download DOES JUST TIMEOUT THOUGH IT WON'T SEND A close MESSAGE THROUGH THE CHANNEL SO THE FLAG MIGHT BE HANDY IN THAT SCENARIO... BUT IF THATS THE ONLY USE FOR IT IT'D PROBABLY BE BETTER TO JUST HAVE THE THING SEND A close MESSAGE DOWN THE CHANNEL INSTEAD
-	//OKAY WHAT IF TUNNELS HAVE conns AND MAYBE THE GORUTINES IN runConn DON'T HAVE GO RUTINES THAT CALL GORUTINES BUT ALSO upload IS A FUNCTION SO COMBINING UPLOAD AND WRITE BUT NOT DOWNLOAD AND READING WOULD BE WEIRD AND UGH I DONT KNOW
-	//OKAY LOOK, THAT THING ABOVE MAKES ALMOST NO SENSE BUT!: YOU SHOULD ACTUALLY USE THOSE TWO exit CHANNELS BY GIVING THEM TO THE TWO GORUTINES AND THEY CAN CHECK IF THE CHANNELS ARE CLOSED TO KNOW HOW THE OTHER ONE IS DOING!!!!
 
-//post break stuff:
-	//GET RID OF exitS ONCE YOU'RE SURE EVERYTHING WORKS, THEY'RE GOOD FOR DEBUG FOR NOW
-	//OH DAMN THE LOOPBACK NETWORK THINGS SEEMS LIKE IT WOULD ACTUALLY WORK: EVERY SERVER YOU CONNECT TO GETS ASSIGNED A LOOPBACK IP WITH A NAME ON YOUR ROUTING TABLE SO YOU CAN JUST DO STUFF LIKE tunnel client crypto 22; ssh crypto@crypto
-		//UHHHHHH THIS COULD FRICK WITH SOME STUFF BECAUSE REMEMBER THE host: FIELD PROBLEM?? THIS WOULD BE MORE LIKELY TO BE A PROBLEM WITH IPS THAN PORTS
-		//TO FIX THE ISSUE YOU'D HAVE TO MAKE THE SERVER CONNECT TO THE SAME LOOPBACK ADDRESS WHICH WOULD BE KIND OF ANNOYING
-	
-//CURRENT ISSUE: CONN'S GETTING AN EOF ERROR WHENEVER IT TIMES OUT INSTEAD OF A TIMEOUT ERROR?
+//OH DAMN THE LOOPBACK NETWORK THINGS SEEMS LIKE IT WOULD ACTUALLY WORK: EVERY SERVER YOU CONNECT TO GETS ASSIGNED A LOOPBACK IP WITH A NAME ON YOUR ROUTING TABLE SO YOU CAN JUST DO STUFF LIKE tunnel client crypto 22; ssh crypto@crypto
+	//UHHHHHH THIS COULD FRICK WITH SOME STUFF BECAUSE REMEMBER THE host: FIELD PROBLEM?? THIS WOULD BE MORE LIKELY TO BE A PROBLEM WITH IPS THAN PORTS
+	//TO FIX THE ISSUE YOU'D HAVE TO MAKE THE SERVER CONNECT TO THE SAME LOOPBACK ADDRESS WHICH WOULD BE KIND OF ANNOYING
 
 import (
 	"fmt"
@@ -89,13 +81,11 @@ func (t *tunnel) connReader() chan message {
 				data = append(data, newData...)
 				readAmt *= 2 //double readAmt every round
 			}
-			netErr, ok := err.(net.Error) //have to cast to use .Timeout()
-			if ok && netErr.Timeout() { //if we read properly, output the data
-				fmt.Println("conn timed out")
-				if totalBytesRead > 0 { //only output if we actually read data
+			if totalBytesRead > 0 { //ALWAYS OUTPUT DATA EVEN IF THERES AN ERROR BECAUSE IT CAN HAVE AN EOF RIGHT AT THE END OF ACTUAL DATA IF SOMEONE SENDS DATA AND THEN CLOSES RIGHT AWAY
 					output <- message{Data: data[:totalBytesRead], Type: "data"}
-				}
-			} else { //close the conn if we got a real error
+			}
+			netErr, ok := err.(net.Error) //have to cast to use .Timeout()
+			if !ok || !netErr.Timeout() { //close the conn if we got a non timeout error
 				data = []byte(err.Error())
 				bytesRead = len(data)
 				fmt.Println("Conn err (probably just closing):", err)
@@ -105,6 +95,7 @@ func (t *tunnel) connReader() chan message {
 			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
 		fmt.Println("readConn closing because tunnel was closed by download")
+		output <- message{Data: []byte("tunnel was closed by download"), Type: "close"}
 	}()
 	return output
 }
@@ -172,8 +163,9 @@ func (t *tunnel) runConn() {
 		readConn := t.connReader()
 		for t.open {
 			msg := <-readConn
-			fmt.Println("\nRead Conn Data:\n", string(msg.Data))
+			fmt.Println("\nRead Conn Data (to upload):\n", string(msg.Data))
 			t.upload(msg)
+			fmt.Println("GOT HERE")
 			if msg.Type == "close" {
 				t.open = false //set a flag instead of just breaking so that the download gorutine exits too
 			}
@@ -220,7 +212,6 @@ func (t *tunnel) upload(fullMsg message) {
 		msg := message{t, fullMsg.Type, dataB64, part, numMessages}
 		encoded, _ := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
 		fmt.Println("Uploading", len(encoded), "bytes")
-		fmt.Println("UPLOADING THESE BYTES:", encoded)
 		post(UPLOAD_URL + "!post", encoded)
 	}
 }
@@ -254,6 +245,7 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 			time.Sleep(100 * time.Millisecond) //don't go too crazy
 		}
 		fmt.Println("downloader closing because readConn closed the tunnel's conn")
+		output <- message{Data: []byte("readConn closed the tunnel's conn"), Type: "close"}
 	}()
 	return output
 }
