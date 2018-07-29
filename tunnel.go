@@ -20,6 +20,8 @@ package main
 	//UHHHHHH THIS COULD FRICK WITH SOME STUFF BECAUSE REMEMBER THE host: FIELD PROBLEM?? THIS WOULD BE MORE LIKELY TO BE A PROBLEM WITH IPS THAN PORTS
 	//TO FIX THE ISSUE YOU'D HAVE TO MAKE THE SERVER CONNECT TO THE SAME LOOPBACK ADDRESS WHICH WOULD BE KIND OF ANNOYING
 
+//USE println INSTEAD OF fmt.Println (STILL WILL NEED fmt THOUGH BECAUSE OF Sprintf)
+
 import (
 	"fmt"
 	"net"
@@ -63,6 +65,12 @@ func post(url string, payload []byte) []byte { //does a post request
 	defer resp.Body.Close()
 	respBytes, _ := ioutil.ReadAll(resp.Body) //ReadAll does all the buffer stuff for me
 	return respBytes
+}
+
+func panicIfErr(err error) {
+	if err != nil {
+		panic(err.Error())
+	}
 }
 
 func (t *tunnel) connReader() chan message {
