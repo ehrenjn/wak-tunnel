@@ -61,9 +61,11 @@ func uniqueId() string {
 }
 
 func post(url string, payload []byte) []byte { //does a post request
-	resp, _ := http.Post(url, "", bytes.NewReader(payload)) //.Post takes a Reader for some reason
+	resp, err := http.Post(url, "", bytes.NewReader(payload)) //.Post takes a Reader for some reason
+	panicIfErr(err)
 	defer resp.Body.Close()
-	respBytes, _ := ioutil.ReadAll(resp.Body) //ReadAll does all the buffer stuff for me
+	respBytes, err := ioutil.ReadAll(resp.Body) //ReadAll does all the buffer stuff for me
+	panicIfErr(err)
 	return respBytes
 }
 
@@ -116,15 +118,18 @@ func b64encode(data []byte) []byte {
 
 func b64decode(dataB64 []byte) []byte {
 	data := make([]byte, base64.StdEncoding.DecodedLen(len(dataB64)))
-	amt, _ := base64.StdEncoding.Decode(data, dataB64)
+	amt, err := base64.StdEncoding.Decode(data, dataB64)
+	panicIfErr(err)
 	return data[:amt]
 }
 
 func client(to string, toPort string) { //actually a server, but pretends to be a client	
-	sock, _ := net.Listen("tcp", ":0")
+	sock, err := net.Listen("tcp", ":0")
+	panicIfErr(err)
 	fmt.Println("Tunnel to", to + ":" + toPort, "open on", sock.Addr().String())
 	for { //keep reusing same socket for every connection
-		conn, _ := sock.Accept() //you can have > 1 conn per port?? how did I just find out about this?
+		conn, err := sock.Accept() //you can have > 1 conn per port?? how did I just find out about this?
+		panicIfErr(err)
 		fmt.Println("Recieved new connection")
 		t := &tunnel{to, toPort, uniqueId(), 0, conn, true}
 		go clientConnection(t)
@@ -173,7 +178,6 @@ func (t *tunnel) runConn() {
 			msg := <-readConn
 			fmt.Println("\nRead Conn Data (to upload):\n", string(msg.Data))
 			t.upload(msg)
-			fmt.Println("GOT HERE")
 			if msg.Type == "close" {
 				t.open = false //set a flag instead of just breaking so that the download gorutine exits too
 			}
@@ -188,7 +192,7 @@ func (t *tunnel) runConn() {
 			if response.Type == "data" {
 				fmt.Println("Writing", len(response.Data), "bytes to conn")
 				_, err := t.conn.Write(response.Data)
-				fmt.Println("POSSIBLE WRITING ERR (MAKE PROPER HANDLING LATER)??:", err)
+				panicIfErr(err)
 			} else if response.Type == "close" {
 				t.open = false
 			}
@@ -218,7 +222,8 @@ func (t *tunnel) upload(fullMsg message) {
 		dataB64 := b64encode(dataSlice)
 		part := (start / MAX_DATA_PER_MSG) + 1
 		msg := message{t, fullMsg.Type, dataB64, part, numMessages}
-		encoded, _ := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
+		encoded, err := json.Marshal(msg) //Marshal magically figures out pointers which is pretty nice
+		panicIfErr(err)
 		fmt.Println("Uploading", len(encoded), "bytes")
 		post(UPLOAD_URL + "!post", encoded)
 	}
@@ -239,9 +244,10 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 						currentMsg.Data = []byte{} //reset Data
 					}
 					msg.Data = b64decode(msg.Data)
+					printWeirdData(msg.Data)
 					currentMsg.Data = append(currentMsg.Data, msg.Data...)
 					if msg.Part == msg.TotalParts {
-						fmt.Println("\nDownloaded:\n", string(currentMsg.Data))
+						//fmt.Println("\nDownloaded:\n", string(currentMsg.Data))
 						output <- currentMsg
 						if currentMsg.Type == "close" { //only way out of downloading
 							fmt.Println("download closing because it's recieved a close message")
@@ -258,9 +264,25 @@ func (t *tunnel) downloader() chan message { //downloads the latest message inte
 	return output
 }
 
+func printWeirdData(data []byte) {
+	if len(data) == 0 {
+		println("DOWNLOADED EMPTY MESSAGE!!!!!!!!!!!!!!")
+	}
+	for _, d := range data {
+		if d > 127 {
+			println("WEIRD MESSAGE:", string(data))
+			break
+		}
+		if d < 1 {
+			println("NULL MESSAGE:", string(data))
+			break
+		}
+	}
+}
+
 var ID_REGEX = regexp.MustCompile(`"id":(\d+?),`)
 func (t *tunnel) newMessages() []message { //downloads all the messages this tunnel hasn't encountered yet
-	filter := fmt.Sprintf(`{"id": {"min": %d}, "MAX_MSGS": 1000}`, t.lastMsgId + 1)
+	filter := fmt.Sprintf(`{"id": {"min": %d}, "MAX_MSGS": 250}`, t.lastMsgId + 1)
 	allJson := post(UPLOAD_URL + "!get", []byte(filter))
 	var allMsgs []message
 	json.Unmarshal(allJson, &allMsgs)
