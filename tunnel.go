@@ -219,6 +219,7 @@ func (t *tunnel) upload(fullMsg message) {
 			end = dataLen
 		}
 		dataSlice := fullMsg.Data[start: end]
+		compareToDecode(dataSlice)
 		dataB64 := b64encode(dataSlice)
 		part := (start / MAX_DATA_PER_MSG) + 1
 		msg := message{t, fullMsg.Type, dataB64, part, numMessages}
@@ -277,6 +278,25 @@ func printWeirdData(data []byte) {
 			println("NULL MESSAGE:", string(data))
 			break
 		}
+	}
+}
+
+func compareSlices(s1 []byte, s2 []byte) bool {
+	if len(s1) != len(s2) {
+		return false
+	}
+	for i, s1e := range s1 {
+		if s1e != s2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func compareToDecode(beforeEncoding []byte) {
+	encoded := b64encode(beforeEncoding)
+	if ! compareSlices(beforeEncoding, b64decode(encoded)) {
+		println("THESE TWO SLICES ARE WAY OFF YO")
 	}
 }
 
